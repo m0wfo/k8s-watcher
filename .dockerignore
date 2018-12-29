@@ -1,0 +1,4 @@
+.vscode
+target/classes
+target/test-classes
+
