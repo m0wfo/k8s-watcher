@@ -2,3 +2,5 @@
 target
 *.yml
 .vscode
+dependency-reduced-pom.xml
+settings.xml
