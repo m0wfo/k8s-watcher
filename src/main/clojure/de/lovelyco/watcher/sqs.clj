@@ -1,6 +1,5 @@
 (ns de.lovelyco.watcher.sqs
-  (require [de.lovelyco.watcher.core :as core]
-           [clojure.tools.logging :as log]
+  (require [clojure.tools.logging :as log]
            [cheshire.core :refer [parse-string]]
            [clojure.core.match :refer [match]])
   (import [com.amazonaws.services.sqs AmazonSQSClientBuilder]
@@ -16,29 +15,30 @@
   (spec [_]))
 
 (defonce sqs-client (delay (.build (AmazonSQSClientBuilder/standard))))
-(defonce bq (LinkedBlockingQueue.))
+(defonce bq (LinkedBlockingQueue.)) ; PackageEvents are placed onto this queue
 
 (defn- find-sqs-queue [client]
   "Find the queue to poll based on the user-supplied name."
   (let [queue-list (.getQueueUrls (.listQueues client))]
     (first (filter #(.endsWith % "k8s-ecr-events-dev") queue-list))))
 
-(def get-queue (memoize #(find-sqs-queue @sqs-client)))
+(def ^:private sqs-queue (delay (find-sqs-queue @sqs-client)))
 
 (defn- get-messages
-  ([] (get-messages @sqs-client (get-queue)))
+  "Poll a given SQS queue for any unclaimed messages."
+  ([] (get-messages @sqs-client @sqs-queue))
   ([client queue]
    (log/info "Polling SQS queue" queue "for events...")
    (.getMessages (.receiveMessage client queue))))
 
-(defn delete-message
-  ([msg] (delete-message @sqs-client (get-queue) msg))
+(defn- delete-message
+  ([msg] (delete-message @sqs-client @sqs-queue msg))
   ([client queue msg]
    (let [req (DeleteMessageRequest. queue (.getReceiptHandle msg))]
      (log/trace "Deleting message" msg)
      (.deleteMessage client req))))
 
-(def tag-pattern (delay (Pattern/compile "(rc-)?(?<branch>[a-zA-Z0-9-]+)(-v\\d\\.\\d\\.\\d(-(?<commit>[a-z0-9]+)))?")))
+(def ^:private tag-pattern (delay (Pattern/compile "(rc-)?(?<branch>[a-zA-Z0-9-]+)(-v\\d\\.\\d\\.\\d(-(?<commit>[a-z0-9]+)))?")))
 
 (defn- parse-tag [^String tag]
   "Infer git info from the docker image tag. Fails fast if tag does not match regex."
@@ -72,21 +72,21 @@
                        (.put bq (to-event decoded))
                        (catch IllegalArgumentException e
                          (log/warn e))))
-      [_] (log/trace "Not interested in message" msg))
+      [_] (log/trace "Not interested in message, discarding" msg))
     (delete-message msg)))
 
-(def pool (delay (Executors/newSingleThreadExecutor)))
+(def ^:private pool (delay (Executors/newSingleThreadExecutor)))
+
+; Public API
 
 (defn start []
   "Start listening for and enqueuing SQS / PackageEvent messages"
   (let [consumer-loop (reify Runnable
                         (run [_]
-                          (log/info "Starting message consumer")
+                          (log/info "Starting SQS message consumer")
                           (while (not (-> (Thread/currentThread) .isInterrupted))
                             (doseq [msg (get-messages)]
                               (route-message msg)))))]
     (.submit @pool consumer-loop)))
 
-(extend-protocol core/EventStage
-  Object
-  (take-work [thing] "whatever2"))
+(defn msg-queue [] bq)
