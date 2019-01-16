@@ -1,5 +1,5 @@
 (ns de.lovelyco.watcher.finder
-  (require [de.lovelyco.watcher.config :as config]
+  (require [de.lovelyco.watcher.util :as util]
            [cheshire.core :refer [parse-string]]
            [clojure.tools.logging :as log])
   (import [com.fasterxml.jackson.databind ObjectMapper]
@@ -16,8 +16,8 @@
 
 (defn call-github [target]
   (log/debug "Calling" target "...")
-  (let [user (config/get-value "GITHUB_USER")
-        token (config/get-value "GITHUB_TOKEN")
+  (let [user (util/get-value "GITHUB_USER")
+        token (util/get-value "GITHUB_TOKEN")
         auth (str "token " token)
         request (-> (okhttp3.Request$Builder.) (.header "Authorization" auth) (.url target) .build)]
     (let [resp (-> client (.newCall request) .execute)]
@@ -45,10 +45,13 @@
 
 (defn- fill-vars [yaml e]
   "Right now the only supported manifest variable is IMAGE_SPEC."
-  (clojure.string/replace yaml #"\$\{IMAGE_SPEC\}" (.spec e)))
+  (let [img (clojure.string/replace yaml #"\$\{IMAGE_SPEC\}" (.spec e))
+        app-name (str (aget (.split (.image e) "/") 1) "-" (.branch e))]
+    (log/debug "Replacing instances of ${APP} with" app-name "in spec")
+    (clojure.string/replace img #"\$\{APP\}" app-name)))
 
 (defprotocol K8sConversion
-  "Convert a String (known to be a well-formed JSON K8s object) into an equivalent POJO"
+  "Convert a String (known to be a well-formed JSON K8s object) into an equivalent K8s domain object"
   (to-k8s [_]))
 
 (extend String
@@ -68,10 +71,3 @@
        (flatten)
        (map #(fill-vars % e))
        (map #(to-k8s %))))
-
-(def test-event
-  (reify de.lovelyco.watcher.sqs.PackageEvent
-    (image [_] "websummit/storyzero")
-    (tag [_] "wibble")
-    (branch [_] "deployment-config")
-    (spec [_] "SPEC_FOR_TEST_EVENT")))
