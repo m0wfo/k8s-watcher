@@ -1,10 +1,11 @@
 (ns de.lovelyco.watcher.sqs
   (require [clojure.tools.logging :as log]
            [cheshire.core :refer [parse-string]]
-           [clojure.core.match :refer [match]])
+           [clojure.core.match :refer [match]]
+           [de.lovelyco.watcher.util :refer [run-loop]])
   (import [com.amazonaws.services.sqs AmazonSQSClientBuilder]
           [com.amazonaws.services.sqs.model DeleteMessageRequest Message]
-          [java.util.concurrent Executors LinkedBlockingQueue]
+          [java.util.concurrent LinkedBlockingQueue]
           [java.util.regex Pattern]))
 
 (defprotocol PackageEvent
@@ -12,7 +13,8 @@
   (image [_])
   (tag [_])
   (branch [_])
-  (spec [_]))
+  (spec [_])
+  (revision [_]))
 
 (defonce sqs-client (delay (.build (AmazonSQSClientBuilder/standard))))
 (defonce bq (LinkedBlockingQueue.)) ; PackageEvents are placed onto this queue
@@ -44,7 +46,7 @@
   "Infer git info from the docker image tag. Fails fast if tag does not match regex."
   (let [matcher (-> @tag-pattern (.matcher tag))]
     (if (.matches matcher)
-      {:branch (.group matcher "branch")}
+      {:branch (.group matcher "branch") :revision (.group matcher "commit")}
       (throw (IllegalArgumentException. (str "Tag " tag " does not match spec, cannot parse"))))))
 
 (defn- to-event [^java.util.Map raw]
@@ -60,6 +62,7 @@
       (tag [_] tag)
       (branch [_] (:branch metadata))
       (spec [_] full-image)
+      (revision [_] (:revision metadata))
       (toString [_] full-image))))
 
 (defn- route-message [^Message msg]
@@ -75,18 +78,11 @@
       [_] (log/trace "Not interested in message, discarding" msg))
     (delete-message msg)))
 
-(def ^:private pool (delay (Executors/newSingleThreadExecutor)))
-
 ; Public API
 
 (defn start []
   "Start listening for and enqueuing SQS / PackageEvent messages"
-  (let [consumer-loop (reify Runnable
-                        (run [_]
-                          (log/info "Starting SQS message consumer")
-                          (while (not (-> (Thread/currentThread) .isInterrupted))
-                            (doseq [msg (get-messages)]
-                              (route-message msg)))))]
-    (.submit @pool consumer-loop)))
+  (run-loop "sqs-message-listener" (doseq [msg (get-messages)]
+              (route-message msg))))
 
 (defn msg-queue [] bq)

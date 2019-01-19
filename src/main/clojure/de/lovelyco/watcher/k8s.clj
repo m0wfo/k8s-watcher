@@ -1,26 +1,57 @@
 (ns de.lovelyco.watcher.k8s
-  (require [de.lovelyco.watcher.config :as config]
-           [cheshire.core :refer [parse-string]])
+  (require [de.lovelyco.watcher.util :as util]
+           [clojure.tools.logging :as log])
   (import
    [io.kubernetes.client.apis AppsV1Api CoreV1Api]
    [io.kubernetes.client Configuration]
    [io.kubernetes.client.util Config]
-   [io.kubernetes.client.models V1Deployment]
+   [io.kubernetes.client.models V1Deployment V1Service V1PersistentVolumeClaim]
    [java.util.concurrent TimeUnit]))
 
-(defn- get-timeout []
-  (Integer/parseInt
-   (config/get-value "K8S_API_TIMEOUT" (do "5"))))
+(defonce ^:private client (delay (let [timeout (Integer/parseInt (util/get-value "K8S_API_TIMEOUT" "5"))
+                                       c (Config/defaultClient)]
+                                   (.setDebugging c true)
+                                   (doto (.getHttpClient c) (.setReadTimeout timeout TimeUnit/SECONDS))
+                                   (Configuration/setDefaultApiClient c))))
 
-(def client (delay (let [c (Config/defaultClient)]
-                     (doto (.getHttpClient c) (.setReadTimeout (get-timeout) TimeUnit/SECONDS))
-                     (Configuration/setDefaultApiClient c)
-                     (CoreV1Api.))))
+(defonce ^:private k8s-ns (util/get-value "K8S_NAMESPACE" "default"))
 
-(defn- decide-api [k8s-object]
-  (if (= V1Deployment (class k8s-object))
-    (AppsV1Api.)
-    (CoreV1Api.)))
+(defmulti deploy class)
 
-(defn- create-or-update [k8s-object]
-  )
+(defmethod deploy V1Deployment [spec]
+  (log/debug "Deploying a V1Deployment object")
+  (let [api (AppsV1Api.)
+        name (-> spec .getMetadata .getName)
+        selector (str "metadata.name=" name)
+        list (.getItems (.listNamespacedDeployment api k8s-ns nil nil selector true nil nil nil nil false))]
+    (if (empty? list)
+      (.createNamespacedDeployment api k8s-ns spec nil)
+      (.replaceNamespacedDeployment api name k8s-ns spec nil))))
+
+(defmethod deploy V1Service [spec]
+  (log/debug "Deploying V1Service object")
+  (let [api (CoreV1Api.)
+        name (-> spec .getMetadata .getName)
+        selector (str "metadata.name=" name)
+        list (.getItems (.listNamespacedService api k8s-ns nil nil selector true nil nil nil nil false))]
+    (if (empty? list)
+      (.createNamespacedService api k8s-ns spec nil)
+      (.replaceNamespacedService api name k8s-ns spec nil))))
+
+(defmethod deploy V1PersistentVolumeClaim [spec]
+  (let [api (CoreV1Api.)
+        name (-> spec .getMetadata .getName)
+        selector (str "metadata.name=" name)
+        list (.getItems (.listNamespacedPersistentVolumeClaim api k8s-ns nil nil selector true nil nil nil nil false))]
+    (if (empty? list)
+      (.createNamespacedPersistentVolumeClaim api k8s-ns spec nil)
+      (.replaceNamespacedPersistentVolumeClaim api name k8s-ns spec nil))))
+
+(defmethod deploy :default [a] (throw (IllegalArgumentException. (str "Don't know how to deploy " (type a)))))
+
+; Public API
+
+(defn deploy-specs [specs]
+  @client
+  (log/debug "Deploying specs" specs)
+  (doall (map #(deploy %) specs)))

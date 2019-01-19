@@ -6,13 +6,13 @@
 (defonce ^:private client (OkHttpClient.))
 (defonce ^:private media-type (MediaType/get "application/json"))
 
-(defn notify [e]
-  (if-let [target (util/get-value "SLACK_WEBHOOK" (fn [x] nil))]
+(defn notify [^String e]
+  (if-let [target (util/get-value "SLACK_WEBHOOK" nil)]
     (let [body (RequestBody/create media-type (str "{\"text\":\"" e "\"}"))
           request (-> (okhttp3.Request$Builder.) (.url target) (.post body) .build)
           response (-> client (.newCall request) .execute)]
-      (log/info "Sending Slack notification about package" e)
+      (log/trace "Sending Slack notification" e)
       (if (.isSuccessful response)
-        (log/debug "Successfully posted notification about package" e)
+        (log/trace "Successfully posted notification about package" e)
         (throw (IllegalStateException. (str "Request to " target " failed with status code " (.code response))))))
     (log/info "Slack webhook not configured, skipping notification")))

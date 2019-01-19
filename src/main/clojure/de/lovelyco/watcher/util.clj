@@ -1,5 +1,7 @@
 (ns de.lovelyco.watcher.util
-  (require [clojure.core.match :refer [match]]))
+  (require [clojure.core.match :refer [match]]
+           [clojure.tools.logging :as log])
+  (import [java.util.concurrent Executors ThreadFactory]))
 
 (defn get-resource [^String filename]
   "Read a file at a given resource path"
@@ -18,3 +20,18 @@
        [""] (absent-fn key)
        [nil] (absent-fn key)
        [_] val))))
+
+(defmacro run-loop [name & body]
+  `(let [factory# (reify ThreadFactory
+                    (newThread [_ runnable#]
+                               (log/info "Starting" ~name)
+                               (Thread. runnable# ~name)))
+         executor# (Executors/newSingleThreadExecutor factory#)
+         work# (reify Runnable
+                 (run [_] (while (not (-> (Thread/currentThread) .isInterrupted))
+                            (try
+                              ~@body
+                              (catch Exception e# (log/error "Exception in loop" e#))))
+                   (log/info "Run loop shut down")))]
+     (.submit executor# work#)
+     executor#))
