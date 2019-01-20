@@ -4,8 +4,9 @@ An opinionated continuous delivery tool for Kubernetes. Think of it as the glue 
 
 - Supports deployable branches by default
 - K8s YAML spec templating
-- Slack integration
+- Slack deployment notifications
 - New Relic integration
+- GitHub integration
 - Single standalone process inside K8s
 
 ### Deployment
