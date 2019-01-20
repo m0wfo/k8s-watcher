@@ -1,6 +1,6 @@
 .DS_Store
 target
-*.yml
+deployment
 .vscode
 dependency-reduced-pom.xml
 settings.xml
