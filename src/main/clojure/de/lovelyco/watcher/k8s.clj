@@ -1,11 +1,12 @@
 (ns de.lovelyco.watcher.k8s
   (require [de.lovelyco.watcher.util :as util]
+           [de.lovelyco.watcher.notifier :as notifier]
            [clojure.tools.logging :as log])
   (import
-   [io.kubernetes.client.apis AppsV1Api CoreV1Api]
+   [io.kubernetes.client.apis AppsV1Api BatchV1Api CoreV1Api]
    [io.kubernetes.client Configuration]
    [io.kubernetes.client.util Config]
-   [io.kubernetes.client.models V1Deployment V1Service V1PersistentVolumeClaim]
+   [io.kubernetes.client.models V1Deployment V1DeleteOptions V1Service V1Job]
    [java.util.concurrent TimeUnit]))
 
 (defonce ^:private client (delay (let [timeout (Integer/parseInt (util/get-value "K8S_API_TIMEOUT" "5"))
@@ -36,16 +37,22 @@
         list (.getItems (.listNamespacedService api k8s-ns nil nil selector true nil nil nil nil false))]
     (if (empty? list)
       (.createNamespacedService api k8s-ns spec nil)
-      (.replaceNamespacedService api name k8s-ns spec nil))))
+      (let [current (first list)]
+        ; update metadata
+        (-> current .getMetadata (.name (-> spec .getMetadata .getName)))
+        (-> current .getMetadata (.labels (-> spec .getMetadata .getLabels)))
+        ; update spec
+        (-> current .getSpec (.ports (-> spec .getSpec .getPorts)))
+        (-> current .getSpec (.selector (-> spec .getSpec .getSelector)))
+        (.replaceNamespacedService api name k8s-ns current nil)))))
 
-(defmethod deploy V1PersistentVolumeClaim [spec]
-  (let [api (CoreV1Api.)
+(defmethod deploy V1Job [spec]
+  (log/debug "Deploying V1Job object")
+  (let [api (BatchV1Api.)
         name (-> spec .getMetadata .getName)
         selector (str "metadata.name=" name)
-        list (.getItems (.listNamespacedPersistentVolumeClaim api k8s-ns nil nil selector true nil nil nil nil false))]
-    (if (empty? list)
-      (.createNamespacedPersistentVolumeClaim api k8s-ns spec nil)
-      (.replaceNamespacedPersistentVolumeClaim api name k8s-ns spec nil))))
+        list (.getItems (.listNamespacedJob api k8s-ns nil nil selector true nil nil nil nil false))]
+    (.createNamespacedJob api k8s-ns spec nil)))
 
 (defmethod deploy :default [a] (throw (IllegalArgumentException. (str "Don't know how to deploy " (type a)))))
 
@@ -54,4 +61,6 @@
 (defn deploy-specs [specs]
   @client
   (log/debug "Deploying specs" specs)
-  (doall (map #(deploy %) specs)))
+  (doall (map (fn [s]
+                (deploy s)
+                (notifier/notify-k8s-deploy s)) specs)))

@@ -5,6 +5,7 @@
   (import [com.fasterxml.jackson.databind ObjectMapper]
           [com.fasterxml.jackson.dataformat.yaml YAMLFactory]
           [io.kubernetes.client JSON]
+          [io.kubernetes.client.models V1Deployment]
           [okhttp3 Credentials OkHttpClient Request]
           [java.util Base64]))
 
@@ -27,7 +28,7 @@
 
 (defn- list-files [e]
   (log/debug "Listing all files for PackageEvent" e)
-  (let [resp (call-github (str gh-root (.image e) "/contents/deployment?ref=" (.branch e)))]
+  (let [resp (call-github (str gh-root (.image e) "/contents/deployment?ref=" (.githubRef e)))]
     (map #(get % "url") resp)))
 
 (defn- get-file-contents [path]
@@ -43,10 +44,10 @@
 (defn- yaml->json [raw-yaml]
   (map #(convert %) (clojure.string/split raw-yaml #"---")))
 
-(defn- fill-vars [yaml e]
+(defn- template [yaml e]
   "Right now the only supported manifest variable is IMAGE_SPEC."
   (let [img (clojure.string/replace yaml #"\$\{IMAGE_SPEC\}" (.spec e))
-        app-name (str (aget (.split (.image e) "/") 1) "-" (.branch e))]
+        app-name (.deploymentName e)]
     (log/debug "Replacing instances of ${APP} with" app-name "in spec")
     (clojure.string/replace img #"\$\{APP\}" app-name)))
 
@@ -62,6 +63,16 @@
                    klass (Class/forName (str "io.kubernetes.client.models.V1" object-kind))]
                (.deserialize (JSON.) this klass)))})
 
+(defn- set-labels [k8s-object e]
+  (let [labels {"service" (aget (.split (.image e) "/") 1) "branch" (.branch e) "revision" (.revision e)}]
+    (-> k8s-object .getMetadata (.labels labels))
+    (if (instance? V1Deployment k8s-object)
+      ; set labels at the pod-level if we're dealing with a Deployment object
+      (let [pod-meta (-> k8s-object .getSpec .getTemplate .getMetadata)]
+        (doseq [kvp labels]
+          (.putLabelsItem pod-meta (first kvp) (second kvp)))))
+    k8s-object))
+
 (defn get-k8s-objects [e]
   "Use a PackageEvent to scan the appropriate GitHub repo for deployment manifests.
   Read these and parse them into K8s objects for the client library to use."
@@ -69,5 +80,6 @@
        (map #(get-file-contents %))
        (map #(yaml->json %))
        (flatten)
-       (map #(fill-vars % e))
-       (map #(to-k8s %))))
+       (map #(template % e))
+       (map #(to-k8s %))
+       (map #(set-labels % e))))

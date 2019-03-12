@@ -2,19 +2,21 @@
   (require [clojure.tools.logging :as log]
            [cheshire.core :refer [parse-string]]
            [clojure.core.match :refer [match]]
-           [de.lovelyco.watcher.util :refer [run-loop]])
+           [de.lovelyco.watcher.util :refer [run-loop]]
+           [de.lovelyco.watcher.tag-parser :refer [parse-docker-tag]])
   (import [com.amazonaws.services.sqs AmazonSQSClientBuilder]
           [com.amazonaws.services.sqs.model DeleteMessageRequest Message]
-          [java.util.concurrent LinkedBlockingQueue]
-          [java.util.regex Pattern]))
+          [java.util.concurrent LinkedBlockingQueue]))
 
 (defprotocol PackageEvent
   "A set of parameters uniquely describing something to deploy"
   (image [_])
   (tag [_])
   (branch [_])
+  (githubRef [_])
   (spec [_])
-  (revision [_]))
+  (revision [_])
+  (deploymentName [_]))
 
 (defonce sqs-client (delay (.build (AmazonSQSClientBuilder/standard))))
 (defonce bq (LinkedBlockingQueue.)) ; PackageEvents are placed onto this queue
@@ -40,15 +42,6 @@
      (log/trace "Deleting message" msg)
      (.deleteMessage client req))))
 
-(def ^:private tag-pattern (delay (Pattern/compile "(rc-)?(?<branch>[a-zA-Z0-9-]+)(-v\\d\\.\\d\\.\\d(-(?<commit>[a-z0-9]+)))?")))
-
-(defn- parse-tag [^String tag]
-  "Infer git info from the docker image tag. Fails fast if tag does not match regex."
-  (let [matcher (-> @tag-pattern (.matcher tag))]
-    (if (.matches matcher)
-      {:branch (.group matcher "branch") :revision (.group matcher "commit")}
-      (throw (IllegalArgumentException. (str "Tag " tag " does not match spec, cannot parse"))))))
-
 (defn- to-event [^java.util.Map raw]
   "Strip info of interest from deserialized JSON and return a PackageEvent object"
   (let [params (get-in raw ["detail" "requestParameters"])
@@ -56,13 +49,17 @@
         repo-name (get params "repositoryName")
         tag (get params "imageTag")
         full-image (str reg-id ".dkr.ecr." (get raw "region") ".amazonaws.com/" repo-name ":" tag)
-        metadata (parse-tag tag)]
+        metadata (parse-docker-tag tag)
+        branch (:branch metadata)
+        sanitized-branch (.toLowerCase branch)]
     (reify PackageEvent
       (image [_] repo-name)
       (tag [_] tag)
-      (branch [_] (:branch metadata))
+      (branch [_] sanitized-branch)
+      (githubRef [_] branch)
       (spec [_] full-image)
       (revision [_] (:revision metadata))
+      (deploymentName [_] (str (aget (.split repo-name "/") 1) "-" sanitized-branch))
       (toString [_] full-image))))
 
 (defn- route-message [^Message msg]

@@ -7,6 +7,7 @@
     (image [_] repo)
     (tag [_] tag)
     (branch [_] branch)
+    (githubRef [_] branch)
     (spec [_] "SPEC_FOR_TEST_EVENT")
     (revision [_] "foo")))
 

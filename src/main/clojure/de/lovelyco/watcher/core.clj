@@ -16,6 +16,7 @@
    (if-let [event (.poll (sqs/msg-queue) 5 TimeUnit/SECONDS)]
      (-> event
          (notifier/notify-starting)
+         (notifier/notify-available)
          (finder/get-k8s-objects)
          (k8s/deploy-specs)
          (log/info "Deployment of" event "finished"))))
