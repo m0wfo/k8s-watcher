@@ -18,6 +18,7 @@
     e))
 
 (defn notify-available [e]
+  (log/info e)
   (let [product (aget (.split (.image e) "/") 1)
         msg (str "Deploying, service should shortly be available at: " (get-value "BASE_URL") "/" (.deploymentName e) "/")]
     (safe-notify msg)

@@ -41,7 +41,7 @@
   (let [json-obj (.readValue yaml-reader raw-yaml Object)]
     (.writeValueAsString json-writer json-obj)))
 
-(defn- yaml->json [raw-yaml]
+(defn yaml->json [raw-yaml]
   (map #(convert %) (clojure.string/split raw-yaml #"---")))
 
 (defn- template [yaml e]
@@ -63,7 +63,14 @@
                    klass (Class/forName (str "io.kubernetes.client.models.V1" object-kind))]
                (.deserialize (JSON.) this klass)))})
 
-(defn- set-labels [k8s-object e]
+(defn to-k8s-object [^String s]
+  (try
+    (to-k8s s)
+    (catch ClassNotFoundException e
+      ; quietly fail for unknown resource types
+      nil)))
+
+(defn set-labels [k8s-object e]
   (let [labels {"service" (aget (.split (.image e) "/") 1) "branch" (.branch e) "revision" (.revision e)}]
     (-> k8s-object .getMetadata (.labels labels))
     (if (instance? V1Deployment k8s-object)
@@ -73,6 +80,14 @@
           (.putLabelsItem pod-meta (first kvp) (second kvp)))))
     k8s-object))
 
+(defn select-env [k8s-object e]
+  (if-let [labels (-> k8s-object .getMetadata .getLabels)]
+    (let [working-env (util/get-value "WORKING_ENV")
+          env-label (.getOrDefault labels "onlyForEnvironment" working-env)
+          branch-label (.getOrDefault labels "onlyForBranch" (.branch e))]
+      (and (= working-env env-label) (= branch-label (.branch e))))
+    true))
+
 (defn get-k8s-objects [e]
   "Use a PackageEvent to scan the appropriate GitHub repo for deployment manifests.
   Read these and parse them into K8s objects for the client library to use."
@@ -81,5 +96,7 @@
        (map #(yaml->json %))
        (flatten)
        (map #(template % e))
-       (map #(to-k8s %))
+       (map #(to-k8s-object %))
+       (filter #(not (nil? %)))
+       (filter #(select-env % e))
        (map #(set-labels % e))))

@@ -8,11 +8,11 @@
   (slurp (clojure.java.io/resource filename)))
 
 (defn get-value
-  "Get a config value from environment var _key_, with an optional function invoked in the nil case.
+  "Get a config value from environment var or system property _key_, with an optional function invoked in the nil case.
   Throws an IllegalArgumentException by default."
   ([key] (get-value key #(throw (IllegalArgumentException. (str "Value for key " % " is not present")))))
   ([key absent]
-   (let [val (System/getenv key)
+   (let [val (or (System/getenv key) (System/getProperty key))
          absent-fn (if (instance? clojure.lang.IFn absent)
                      absent
                      (fn [x] absent))]

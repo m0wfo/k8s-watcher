@@ -2,24 +2,12 @@
   (require [clojure.tools.logging :as log]
            [cheshire.core :refer [parse-string]]
            [clojure.core.match :refer [match]]
-           [de.lovelyco.watcher.util :refer [run-loop]]
-           [de.lovelyco.watcher.tag-parser :refer [parse-docker-tag]])
+           [de.lovelyco.watcher.package-events :refer [new-package-event]]
+           [de.lovelyco.watcher.util :refer [run-loop]])
   (import [com.amazonaws.services.sqs AmazonSQSClientBuilder]
-          [com.amazonaws.services.sqs.model DeleteMessageRequest Message]
-          [java.util.concurrent LinkedBlockingQueue]))
-
-(defprotocol PackageEvent
-  "A set of parameters uniquely describing something to deploy"
-  (image [_])
-  (tag [_])
-  (branch [_])
-  (githubRef [_])
-  (spec [_])
-  (revision [_])
-  (deploymentName [_]))
+          [com.amazonaws.services.sqs.model DeleteMessageRequest Message]))
 
 (defonce sqs-client (delay (.build (AmazonSQSClientBuilder/standard))))
-(defonce bq (LinkedBlockingQueue.)) ; PackageEvents are placed onto this queue
 
 (defn- find-sqs-queue [client]
   "Find the queue to poll based on the user-supplied name."
@@ -45,24 +33,12 @@
 (defn- to-event [^java.util.Map raw]
   "Strip info of interest from deserialized JSON and return a PackageEvent object"
   (let [params (get-in raw ["detail" "requestParameters"])
-        reg-id (get params "registryId")
+        repo-host (str (get params "registryId") ".dkr.ecr." (get raw "region") ".amazonaws.com")
         repo-name (get params "repositoryName")
-        tag (get params "imageTag")
-        full-image (str reg-id ".dkr.ecr." (get raw "region") ".amazonaws.com/" repo-name ":" tag)
-        metadata (parse-docker-tag tag)
-        branch (:branch metadata)
-        sanitized-branch (.toLowerCase branch)]
-    (reify PackageEvent
-      (image [_] repo-name)
-      (tag [_] tag)
-      (branch [_] sanitized-branch)
-      (githubRef [_] branch)
-      (spec [_] full-image)
-      (revision [_] (:revision metadata))
-      (deploymentName [_] (str (aget (.split repo-name "/") 1) "-" sanitized-branch))
-      (toString [_] full-image))))
+        tag (get params "imageTag")]
+    (new-package-event repo-host repo-name tag)))
 
-(defn- route-message [^Message msg]
+(defn- route-message [^Message msg bq]
   (let [decoded (parse-string (.getBody msg))
         msg-type (get-in decoded ["detail" "eventName"])]
     (match [msg-type]
@@ -77,9 +53,7 @@
 
 ; Public API
 
-(defn start []
+(defn start [bq]
   "Start listening for and enqueuing SQS / PackageEvent messages"
   (run-loop "sqs-message-listener" (doseq [msg (get-messages)]
-              (route-message msg))))
-
-(defn msg-queue [] bq)
+              (route-message msg bq))))

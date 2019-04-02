@@ -1,0 +1,21 @@
+apiVersion: k8s.io/v1
+kind: Database
+metadata:
+  name: calendar-rds
+  namespace: default
+  labels:
+    onlyForEnvironment: prod
+spec:
+  class: db.t2.medium
+  engine: postgres
+  dbname: pgsql
+  name: pgsql
+  password:
+    name: calendar-secrets
+    key: pg_password
+  username: calendar
+  size: 20 # (in GB)
+  backupretentionperiod: 7 # days to keep backup, 0 means diable
+  encrypted: true # should the database be encrypted
+  multiaz: true # multi AZ support
+  storagetype: gp2 # type of the underlying storage

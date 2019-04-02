@@ -3,7 +3,7 @@
            [de.lovelyco.watcher.notifier :as notifier]
            [clojure.tools.logging :as log])
   (import
-   [io.kubernetes.client.apis AppsV1Api BatchV1Api CoreV1Api]
+   [io.kubernetes.client.apis AppsV1Api BatchV1Api CoreV1Api ExtensionsV1beta1Api]
    [io.kubernetes.client Configuration]
    [io.kubernetes.client.util Config]
    [io.kubernetes.client.models V1Deployment V1DeleteOptions V1Service V1Job]
@@ -17,12 +17,22 @@
 
 (defonce ^:private k8s-ns (util/get-value "K8S_NAMESPACE" "default"))
 
+(defn- get-name [spec] (-> spec .getMetadata .getName))
+
+(defn- update-ingress [^V1Service spec]
+  ; (let [api (ExtensionsV1beta1Api.)
+  ;       service-shortname (-> spec .getMetadata .getLabels (.get "service"))
+  ;       (ingress-name (util/get-value "INGRESS_NAME"))
+  ;       ingress-def (.readNamespacedIngress api ingress-name k8s-ns nil nil nil)]
+  ;   (log/debug ingress-def)))
+  (log/info "Ingress update here"))
+
 (defmulti deploy class)
 
 (defmethod deploy V1Deployment [spec]
   (log/debug "Deploying a V1Deployment object")
   (let [api (AppsV1Api.)
-        name (-> spec .getMetadata .getName)
+        name (get-name spec)
         selector (str "metadata.name=" name)
         list (.getItems (.listNamespacedDeployment api k8s-ns nil nil selector true nil nil nil nil false))]
     (if (empty? list)
@@ -32,7 +42,7 @@
 (defmethod deploy V1Service [spec]
   (log/debug "Deploying V1Service object")
   (let [api (CoreV1Api.)
-        name (-> spec .getMetadata .getName)
+        name (get-name spec)
         selector (str "metadata.name=" name)
         list (.getItems (.listNamespacedService api k8s-ns nil nil selector true nil nil nil nil false))]
     (if (empty? list)
@@ -44,14 +54,20 @@
         ; update spec
         (-> current .getSpec (.ports (-> spec .getSpec .getPorts)))
         (-> current .getSpec (.selector (-> spec .getSpec .getSelector)))
-        (.replaceNamespacedService api name k8s-ns current nil)))))
+        (.replaceNamespacedService api name k8s-ns current nil)))
+    (update-ingress spec)))
 
 (defmethod deploy V1Job [spec]
   (log/debug "Deploying V1Job object")
   (let [api (BatchV1Api.)
-        name (-> spec .getMetadata .getName)
+        name (get-name spec)
         selector (str "metadata.name=" name)
         list (.getItems (.listNamespacedJob api k8s-ns nil nil selector true nil nil nil nil false))]
+    (if-not (empty? list)
+      ; if there was an old job hanging around, clean it out first
+      (let [delete-options (doto (V1DeleteOptions.) (.setPropagationPolicy "Background"))]
+        (log/debug "Deleting old job before creating new one")
+        (.deleteNamespacedJob api name k8s-ns delete-options nil nil nil nil)))
     (.createNamespacedJob api k8s-ns spec nil)))
 
 (defmethod deploy :default [a] (throw (IllegalArgumentException. (str "Don't know how to deploy " (type a)))))
