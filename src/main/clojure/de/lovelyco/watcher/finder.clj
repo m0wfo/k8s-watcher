@@ -45,7 +45,7 @@
   (map #(convert %) (clojure.string/split raw-yaml #"---")))
 
 (defn- template [yaml e]
-  "Right now the only supported manifest variable is IMAGE_SPEC."
+  "Populate YAML template variables with actual values"
   (let [img (clojure.string/replace yaml #"\$\{IMAGE_SPEC\}" (.spec e))
         app-name (.deploymentName e)]
     (log/debug "Replacing instances of ${APP} with" app-name "in spec")
@@ -76,6 +76,7 @@
     (if (instance? V1Deployment k8s-object)
       ; set labels at the pod-level if we're dealing with a Deployment object
       (let [pod-meta (-> k8s-object .getSpec .getTemplate .getMetadata)]
+        (.putLabelsItem pod-meta "heritage" "watcher")
         (doseq [kvp labels]
           (.putLabelsItem pod-meta (first kvp) (second kvp)))))
     k8s-object))

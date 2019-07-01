@@ -14,6 +14,13 @@
   (revision [_])
   (deploymentName [_]))
 
+(defn sanitize [^String raw]
+  (let [lower (.toLowerCase raw)
+        clean (clojure.string/replace lower #"[\W_]" "-")]
+    (if (> (.length clean) 60) ; truncate if longer
+      (.substring clean 0 60)
+      clean)))
+
 (defn new-package-event
   ([^String full-image-name]
     (let [docker-image (-> (Parsers/getParser) (.parseImageName full-image-name))
@@ -25,7 +32,8 @@
    (log/debug "Creating PackageEvent repo-host =" repo-host "repo-name =" repo-name "image-tag =" image-tag)
    (let [metadata (parse-docker-tag image-tag)
          branch (:branch metadata)
-         sanitized-branch (.toLowerCase branch)
+         sanitized-branch (sanitize branch)
+         sanitized-package (sanitize (aget (.split repo-name "/") 1))
          full-image (str repo-host "/" repo-name ":" image-tag)]
      (reify PackageEvent
        (image [_] repo-name)
@@ -34,7 +42,7 @@
        (githubRef [_] branch)
        (spec [_] full-image)
        (revision [_] (:revision metadata))
-       (deploymentName [_] (str (aget (.split repo-name "/") 1) "-" sanitized-branch))
+       (deploymentName [_] (str sanitized-package  "-" sanitized-branch))
        (toString [_] full-image)))))
 
 (defn submit-package-event [event ^java.util.concurrent.BlockingQueue bq]

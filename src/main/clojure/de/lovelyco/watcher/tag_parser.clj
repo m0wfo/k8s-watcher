@@ -1,20 +1,20 @@
 (ns de.lovelyco.watcher.tag-parser
-  (:require [de.lovelyco.watcher.util :refer [get-resource]]
-            [instaparse.core :as insta]))
+  (import [java.util.regex Pattern])
+  (:require [de.lovelyco.watcher.util :refer [get-resource]]))
 
-(def ^:private tag-parser
-  (delay (insta/parser (get-resource "image-grammar.bnf") :output-format :enlive)))
-
-(defn- stringify [token]
-  (apply str (get (first token) :content)))
-
+(defn- remove-version-and-commit [tokens]
+  (let [minus-commit (drop-last 1 tokens)]
+    (if (= "SNAPSHOT" (last minus-commit))
+      (drop-last 2 minus-commit)
+      (drop-last 1 minus-commit))))
 ; Public API
 
 (defn parse-docker-tag [^String raw-tag]
-  (let [parse-tree (insta/parse @tag-parser raw-tag)
-        tag (get parse-tree :content)
-        branch (filter #(= :BRANCH (get % :tag)) tag)
-        revision (filter #(= :REVISION (get % :tag)) tag)]
-    (if (insta/failure? parse-tree)
-      (throw (IllegalArgumentException. (str "Cannot parse input '" raw-tag "'"))))
-    {:branch (stringify branch) :revision (stringify revision)}))
+  (let [tokens (clojure.string/split raw-tag #"-")
+        pattern (Pattern/compile "(rc-)?(?<branch>.+)")
+        revision (last tokens)
+        branch (remove-version-and-commit tokens)
+        matcher (.matcher pattern (clojure.string/join "-" branch))]
+    (if (.matches matcher)
+      {:branch (.group matcher "branch") :revision revision}
+      (throw (IllegalArgumentException. (str "Couldn't parse tag " raw-tag))))))
