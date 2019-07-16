@@ -4,6 +4,7 @@ metadata:
   name: foo
   labels:
     onlyForEnvironment: prod
+    service: importantservice
 spec:
   replicas: 1
   selector:

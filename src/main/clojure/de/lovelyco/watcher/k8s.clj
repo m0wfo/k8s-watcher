@@ -6,7 +6,7 @@
    [io.kubernetes.client.apis AppsV1Api BatchV1Api CoreV1Api ExtensionsV1beta1Api]
    [io.kubernetes.client Configuration]
    [io.kubernetes.client.util Config]
-   [io.kubernetes.client.models V1Deployment V1DeleteOptions V1Service V1Job]
+   [io.kubernetes.client.models V1Deployment V1DeleteOptions V1EnvVar V1Namespace V1Service V1Job]
    [java.util.concurrent TimeUnit]))
 
 (defonce ^:private client (delay (let [timeout (Integer/parseInt (util/get-value "K8S_API_TIMEOUT" "5"))
@@ -18,6 +18,17 @@
 (defonce ^:private k8s-ns (util/get-value "K8S_NAMESPACE" "default"))
 
 (defn- get-name [spec] (-> spec .getMetadata .getName))
+
+(defn inject-service-name [spec]
+  "Inject APP and SERVICE environment variables for config management tools to infer correct config sets"
+  (let [container-spec (-> spec .getSpec .getTemplate .getSpec)
+        containers (concat (.getContainers container-spec) (.getInitContainers container-spec))
+        deploy-name (doto (V1EnvVar.) (.name "APP") (.value (get-name spec)))
+        service-name (doto (V1EnvVar.) (.name "SERVICE") (.value (-> spec .getMetadata .getLabels (.get "service"))))]
+    (doall (doseq [container containers]
+             (.addEnvItem container deploy-name)
+             (.addEnvItem container service-name))))
+  spec)
 
 (defn- update-ingress [^V1Service spec]
   ; (let [api (ExtensionsV1beta1Api.)
@@ -34,10 +45,16 @@
   (let [api (AppsV1Api.)
         name (get-name spec)
         selector (str "metadata.name=" name)
-        list (.getItems (.listNamespacedDeployment api k8s-ns nil nil selector true nil nil nil nil false))]
+        list (.getItems (.listNamespacedDeployment api k8s-ns nil nil selector true nil nil nil nil false))
+        decorated (inject-service-name spec)]
     (if (empty? list)
-      (.createNamespacedDeployment api k8s-ns spec nil)
-      (.replaceNamespacedDeployment api name k8s-ns spec nil))))
+      (.createNamespacedDeployment api k8s-ns decorated nil)
+      (.replaceNamespacedDeployment api name k8s-ns decorated nil))))
+
+(defmethod deploy V1Namespace [spec]
+  (log/debug "Deploying V1Namespace object")
+  (let [api (CoreV1Api.)]
+    (.createNamespace api spec nil)))
 
 (defmethod deploy V1Service [spec]
   (log/debug "Deploying V1Service object")
@@ -62,13 +79,14 @@
   (let [api (BatchV1Api.)
         name (get-name spec)
         selector (str "metadata.name=" name)
-        list (.getItems (.listNamespacedJob api k8s-ns nil nil selector true nil nil nil nil false))]
+        list (.getItems (.listNamespacedJob api k8s-ns nil nil selector true nil nil nil nil false))
+        decorated (inject-service-name spec)]
     (if-not (empty? list)
       ; if there was an old job hanging around, clean it out first
       (let [delete-options (doto (V1DeleteOptions.) (.setPropagationPolicy "Background"))]
         (log/debug "Deleting old job before creating new one")
         (.deleteNamespacedJob api name k8s-ns delete-options nil nil nil nil)))
-    (.createNamespacedJob api k8s-ns spec nil)))
+    (.createNamespacedJob api k8s-ns decorated nil)))
 
 (defmethod deploy :default [a] (throw (IllegalArgumentException. (str "Don't know how to deploy " (type a)))))
 
